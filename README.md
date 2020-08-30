@@ -14,8 +14,13 @@ The original version would return only the first letter of a message
 when the interval timeout is set to ca 1 character time (11/baudrate).
 
 I have also included a function to return all available ports on the computer.
- 
+It can be found in enum_windows.go or enum_linux.go.
 
+EnumerateSerialPorts() will return a list of ports and a list of description.
+The last list will only apear on windows.
+The descriptions are nice to have when determine which port to use, f.ex
+to avoid system-generated Bluetooth ports.
+ 
 
 Details
 -------
