@@ -6,6 +6,17 @@ Serial
 A Go package to allow you to read and write from the
 serial port as a stream of bytes.
 
+Updates by jkvatne. 
+-------------------
+Now includes parameter for interval timeout on windows. 
+This makes it easier to implement reading of data from a remote unit.
+The original version would return only the first letter of a message
+when the interval timeout is set to ca 1 character time (11/baudrate).
+
+I have also included a function to return all available ports on the computer.
+ 
+
+
 Details
 -------
 It aims to have the same API on all platforms, including windows.  As

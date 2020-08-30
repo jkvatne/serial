@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 type Port struct {
@@ -111,8 +113,7 @@ func (p *Port) Write(buf []byte) (int, error) {
 	}
 	for i := 0; i < 10; i++ {
 		m, err = getOverlappedResult(p.fd, p.wo, false)
-		 ERROR_IO_INCOMPLETE := syscall.ERROR_IO_PENDING - 1   // (Value 996) Included here because it is missing from syscall module
-		if err != syscall.ERROR_IO_PENDING && err != ERROR_IO_INCOMPLETE {
+		if err != syscall.ERROR_IO_PENDING && err != windows.ERROR_IO_INCOMPLETE {
 			return m, err
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -350,3 +351,4 @@ func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped, wait 
 
 	return n, nil
 }
+
