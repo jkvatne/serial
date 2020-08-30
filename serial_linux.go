@@ -11,7 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func openPort(name string, baud int, databits byte, parity Parity, stopbits StopBits, readTimeout time.Duration) (p *Port, err error) {
+const devFolder = "/dev"
+const regexFilter = "(ttyS|ttyUSB|ttyACM|ttyAMA|rfcomm|ttyO)[0-9]{1,3}"
+
+func openPort(name string, baud int, databits byte, parity Parity, stopbits StopBits, readTimeout, intervalTimeout time.Duration) (p *Port, err error) {
 	var bauds = map[int]uint32{
 		50:      unix.B50,
 		75:      unix.B75,

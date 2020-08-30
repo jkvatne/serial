@@ -37,7 +37,7 @@ type structTimeouts struct {
 	WriteTotalTimeoutConstant   uint32
 }
 
-func openPort(name string, baud int, databits byte, parity Parity, stopbits StopBits, readTimeout time.Duration) (p *Port, err error) {
+func openPort(name string, baud int, databits byte, parity Parity, stopbits StopBits, readTimeout time.Duration, intervalTimeout time.Duration) (p *Port, err error) {
 	if len(name) > 0 && name[0] != '\\' {
 		name = "\\\\.\\" + name
 	}
@@ -65,7 +65,7 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 	if err = setupComm(h, 64, 64); err != nil {
 		return nil, err
 	}
-	if err = setCommTimeouts(h, readTimeout); err != nil {
+	if err = setCommTimeouts(h, readTimeout, intervalTimeout); err != nil {
 		return nil, err
 	}
 	if err = setCommMask(h); err != nil {
@@ -101,11 +101,23 @@ func (p *Port) Write(buf []byte) (int, error) {
 		return 0, err
 	}
 	var n uint32
+	var m int
 	err := syscall.WriteFile(p.fd, buf, &n, p.wo)
+	if err == nil {
+		return int(n), nil
+	}
 	if err != nil && err != syscall.ERROR_IO_PENDING {
 		return int(n), err
 	}
-	return getOverlappedResult(p.fd, p.wo)
+	for i := 0; i < 10; i++ {
+		m, err = getOverlappedResult(p.fd, p.wo, false)
+		 ERROR_IO_INCOMPLETE := syscall.ERROR_IO_PENDING - 1   // (Value 996) Included here because it is missing from syscall module
+		if err != syscall.ERROR_IO_PENDING && err != ERROR_IO_INCOMPLETE {
+			return m, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return int(n), err
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
@@ -124,7 +136,7 @@ func (p *Port) Read(buf []byte) (int, error) {
 	if err != nil && err != syscall.ERROR_IO_PENDING {
 		return int(done), err
 	}
-	return getOverlappedResult(p.fd, p.ro)
+	return getOverlappedResult(p.fd, p.ro, true)
 }
 
 // Discards data written to the port but not transmitted,
@@ -215,7 +227,7 @@ func setCommState(h syscall.Handle, baud int, databits byte, parity Parity, stop
 	return nil
 }
 
-func setCommTimeouts(h syscall.Handle, readTimeout time.Duration) error {
+func setCommTimeouts(h syscall.Handle, readTimeout time.Duration, intervalTimeout time.Duration) error {
 	var timeouts structTimeouts
 	const MAXDWORD = 1<<32 - 1
 
@@ -232,6 +244,10 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration) error {
 		}
 	}
 
+	var intervalMs int64 = MAXDWORD
+	if intervalTimeout > 0 {
+		intervalMs = intervalTimeout.Nanoseconds() / 1e6
+	}
 	/* From http://msdn.microsoft.com/en-us/library/aa363190(v=VS.85).aspx
 
 		 For blocking I/O see below:
@@ -253,9 +269,13 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration) error {
 		 If no bytes arrive within the time specified by
 		       ReadTotalTimeoutConstant, ReadFile times out.
 	*/
-
-	timeouts.ReadIntervalTimeout = MAXDWORD
-	timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
+	if intervalTimeout == 0 {
+		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
+		timeouts.ReadIntervalTimeout = MAXDWORD
+	} else {
+		timeouts.ReadTotalTimeoutMultiplier = 0
+		timeouts.ReadIntervalTimeout = uint32(intervalMs)
+	}
 	timeouts.ReadTotalTimeoutConstant = uint32(timeoutMs)
 
 	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
@@ -313,12 +333,17 @@ func newOverlapped() (*syscall.Overlapped, error) {
 	return &overlapped, nil
 }
 
-func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped) (int, error) {
+func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped, wait bool) (int, error) {
 	var n int
+	var w uint32
+	if wait {
+		w = 1
+	}
 	r, _, err := syscall.Syscall6(nGetOverlappedResult, 4,
 		uintptr(h),
 		uintptr(unsafe.Pointer(overlapped)),
-		uintptr(unsafe.Pointer(&n)), 1, 0, 0)
+		uintptr(unsafe.Pointer(&n)),
+		uintptr(w), 0, 0)
 	if r == 0 {
 		return n, err
 	}

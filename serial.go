@@ -98,6 +98,7 @@ type Config struct {
 	Name        string
 	Baud        int
 	ReadTimeout time.Duration // Total timeout
+    IntervalTimeout time.Duration // Max time between characters 
 
 	// Size is the number of data bits. If 0, DefaultSize is used.
 	Size byte
@@ -136,7 +137,7 @@ func OpenPort(c *Config) (*Port, error) {
 	if stop == 0 {
 		stop = Stop1
 	}
-	return openPort(c.Name, c.Baud, size, par, stop, c.ReadTimeout)
+	return openPort(c.Name, c.Baud, size, par, stop, c.ReadTimeout, c.IntervalTimeout)
 }
 
 // Converts the timeout values for Linux / POSIX systems
