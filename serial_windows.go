@@ -274,7 +274,7 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration, intervalTimeou
 		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
 		timeouts.ReadIntervalTimeout = MAXDWORD
 	} else {
-		timeouts.ReadTotalTimeoutMultiplier = 0
+		timeouts.ReadTotalTimeoutMultiplier = 1
 		timeouts.ReadIntervalTimeout = uint32(intervalMs)
 	}
 	timeouts.ReadTotalTimeoutConstant = uint32(timeoutMs)
