@@ -1,4 +1,4 @@
-// +build windows
+//go:build windows
 
 package serial
 
@@ -23,9 +23,14 @@ var (
 	procSetupDiGetDeviceRegistryPropertyW = modsetupapi.NewProc("SetupDiGetDeviceRegistryPropertyW")
 )
 
-var deviceClassPortsGUID = windows.GUID{0x4d36e978, 0xe325, 0x11ce, [8]byte{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18}}
+var deviceClassPortsGUID = windows.GUID{
+	Data1: 0x4d36e978,
+	Data2: 0xe325,
+	Data3: 0x11ce,
+	Data4: [8]byte{0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18},
+}
 
-// DIGCF flags controll what is included in the device information set built by SetupDiGetClassDevs
+// DIGCF flags control what is included in the device information set built by SetupDiGetClassDevs
 type DIGCF uint32
 
 const (
@@ -51,7 +56,7 @@ type DevInfoData struct {
 	_         uintptr
 }
 
-// Do the interface allocations only once for common Errno values
+// Do the interface allocations only once for arg Errno values
 const (
 	errnoERROR_IO_PENDING = 997
 )
@@ -60,7 +65,7 @@ var (
 	errERROR_IO_PENDING error = syscall.Errno(errnoERROR_IO_PENDING)
 )
 
-// errnoErr returns common boxed Errno values, to prevent
+// errnoErr returns arg boxed Errno values, to prevent
 // allocations at runtime.
 func errnoErr(e syscall.Errno) error {
 	switch e {
@@ -82,7 +87,7 @@ func (h DevInfo) Close() error {
 }
 
 func SetupDiDestroyDeviceInfoList(DeviceInfoSet DevInfo) (err error) {
-	r1, _, e1 := syscall.Syscall(procSetupDiDestroyDeviceInfoList.Addr(), 1, uintptr(DeviceInfoSet), 0, 0)
+	r1, _, e1 := syscall.SyscallN(procSetupDiDestroyDeviceInfoList.Addr(), uintptr(DeviceInfoSet), 0, 0)
 	if r1 == 0 {
 		if e1 != 0 {
 			err = errnoErr(e1)
@@ -109,9 +114,13 @@ func SetupDiGetClassDevsEx(ClassGUID *windows.GUID, Enumerator string, hwndParen
 			return
 		}
 	}
-	r0, _, e1 := syscall.Syscall9(procSetupDiGetClassDevsExW.Addr(), 7, uintptr(unsafe.Pointer(ClassGUID)),
-		uintptr(unsafe.Pointer(_p0)), uintptr(hwndParent), uintptr(Flags), uintptr(DeviceInfoSet),
-		uintptr(unsafe.Pointer(_p1)), uintptr(0), 0, 0)
+	r0, _, e1 := syscall.SyscallN(procSetupDiGetClassDevsExW.Addr(), uintptr(unsafe.Pointer(ClassGUID)),
+		uintptr(unsafe.Pointer(_p0)),
+		hwndParent,
+		uintptr(Flags),
+		uintptr(DeviceInfoSet),
+		uintptr(unsafe.Pointer(_p1)),
+		uintptr(0), 0, 0)
 	handle = DevInfo(r0)
 	if handle == DevInfo(windows.InvalidHandle) {
 		if e1 != 0 {
@@ -123,10 +132,10 @@ func SetupDiGetClassDevsEx(ClassGUID *windows.GUID, Enumerator string, hwndParen
 	return
 }
 
-// SetupDiEnumDeviceInfo function returns a SP_DEVINFO_DATA structure that specifies a device information element in a device information set.
+// SetupDiEnumDeviceInfo function returns an SP_DEVINFO_DATA structure that specifies a device information element in a device information set.
 func SetupDiEnumDeviceInfo(DeviceInfoSet DevInfo, MemberIndex int, data *DevInfoData) (err error) {
 	data.size = uint32(unsafe.Sizeof(*data))
-	r1, _, e1 := syscall.Syscall(procSetupDiEnumDeviceInfo.Addr(), 3, uintptr(DeviceInfoSet), uintptr(MemberIndex), uintptr(unsafe.Pointer(data)))
+	r1, _, e1 := syscall.SyscallN(procSetupDiEnumDeviceInfo.Addr(), uintptr(DeviceInfoSet), uintptr(MemberIndex), uintptr(unsafe.Pointer(data)))
 	if r1 == 0 {
 		if e1 != 0 {
 			err = errnoErr(e1)
@@ -143,7 +152,7 @@ func SetupDiGetDeviceRegistryProperty(deviceInfoSet DevInfo, deviceInfoData *Dev
 	for {
 		var dataType uint32
 		buf := make([]byte, reqSize)
-		r1, _, e1 := syscall.Syscall9(procSetupDiGetDeviceRegistryPropertyW.Addr(), 7, uintptr(deviceInfoSet),
+		r1, _, e1 := syscall.SyscallN(procSetupDiGetDeviceRegistryPropertyW.Addr(), uintptr(deviceInfoSet),
 			uintptr(unsafe.Pointer(deviceInfoData)), uintptr(property), uintptr(unsafe.Pointer(&dataType)),
 			uintptr(unsafe.Pointer(&buf[0])), uintptr(uint32(len(buf))), uintptr(unsafe.Pointer(&reqSize)), 0, 0)
 		if r1 == 0 {
@@ -182,7 +191,7 @@ func getRegistryValue(buf []byte, dataType uint32) (interface{}, error) {
 		return binary.BigEndian.Uint32(buf), nil
 	case windows.REG_MULTI_SZ:
 		bufW := bufToUTF16(buf)
-		a := []string{}
+		var a []string
 		for i := 0; i < len(bufW); {
 			j := i + wcslen(bufW[i:])
 			if i < j {
@@ -195,7 +204,7 @@ func getRegistryValue(buf []byte, dataType uint32) (interface{}, error) {
 	case windows.REG_QWORD_LITTLE_ENDIAN:
 		return binary.LittleEndian.Uint64(buf), nil
 	default:
-		return nil, fmt.Errorf("Unsupported registry value type: %v", dataType)
+		return nil, fmt.Errorf("unsupported registry value type: %v", dataType)
 	}
 }
 
@@ -222,7 +231,7 @@ func bufToUTF16(buf []byte) []uint16 {
 func EnumerateSerialPorts() ([]string, []string, error) {
 	devInfoList, err := SetupDiGetClassDevsEx(&deviceClassPortsGUID, "", 0, DIGCF_PRESENT, DevInfo(0), "")
 	if err != nil {
-		return nil, nil, fmt.Errorf("Error calling SetupDiGetClassDevsEx: %s", err.Error())
+		return nil, nil, fmt.Errorf("error calling SetupDiGetClassDevsEx, %s", err.Error())
 	}
 	var info []string
 	var ports []string
@@ -236,6 +245,9 @@ func EnumerateSerialPorts() ([]string, []string, error) {
 			continue
 		}
 		value, err := SetupDiGetDeviceRegistryProperty(devInfoList, &data, SPDRP_FRIENDLYNAME)
+		if err != nil {
+			return ports, info, nil
+		}
 		if s, ok := value.(string); ok {
 			if strings.Contains(s, "COM") {
 				pos := strings.Index(s, "COM")

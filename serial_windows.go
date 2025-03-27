@@ -1,8 +1,9 @@
-// +build windows
+//go:build windows
 
 package serial
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -43,8 +44,12 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 	if len(name) > 0 && name[0] != '\\' {
 		name = "\\\\.\\" + name
 	}
-
-	h, err := syscall.CreateFile(syscall.StringToUTF16Ptr(name),
+	st, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	h, err := syscall.CreateFile(
+		st,
 		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
 		0,
 		nil,
@@ -57,7 +62,7 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 	f := os.NewFile(uintptr(h), name)
 	defer func() {
 		if err != nil {
-			f.Close()
+			err = f.Close()
 		}
 	}()
 
@@ -92,13 +97,14 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 }
 
 func (p *Port) Close() error {
-	return p.f.Close()
+	err := p.f.Close()
+	p.f = nil
+	return err
 }
 
 func (p *Port) Write(buf []byte) (int, error) {
 	p.wl.Lock()
 	defer p.wl.Unlock()
-
 	if err := resetEvent(p.wo.HEvent); err != nil {
 		return 0, err
 	}
@@ -108,27 +114,25 @@ func (p *Port) Write(buf []byte) (int, error) {
 	if err == nil {
 		return int(n), nil
 	}
-	if err != nil && err != syscall.ERROR_IO_PENDING {
+	if err != syscall.ERROR_IO_PENDING {
 		return int(n), err
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		m, err = getOverlappedResult(p.fd, p.wo, false)
 		if err != syscall.ERROR_IO_PENDING && err != windows.ERROR_IO_INCOMPLETE {
 			return m, err
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond / 2)
 	}
 	return int(n), err
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
 	if p == nil || p.f == nil {
-		return 0, fmt.Errorf("Invalid port on read")
+		return 0, fmt.Errorf("invalid port on read")
 	}
-
 	p.rl.Lock()
 	defer p.rl.Unlock()
-
 	if err := resetEvent(p.ro.HEvent); err != nil {
 		return 0, err
 	}
@@ -140,7 +144,7 @@ func (p *Port) Read(buf []byte) (int, error) {
 	return getOverlappedResult(p.fd, p.ro, true)
 }
 
-// Discards data written to the port but not transmitted,
+// Flush discards data written to the port but not transmitted,
 // or data received but not read
 func (p *Port) Flush() error {
 	return purgeComm(p.fd)
@@ -154,8 +158,8 @@ var (
 	nGetOverlappedResult,
 	nCreateEvent,
 	nResetEvent,
-	nPurgeComm,
-	nFlushFileBuffers uintptr
+	nPurgeComm uintptr
+	// nFlushFileBuffers uintptr
 )
 
 func init() {
@@ -163,8 +167,12 @@ func init() {
 	if err != nil {
 		panic("LoadLibrary " + err.Error())
 	}
-	defer syscall.FreeLibrary(k32)
-
+	defer func(handle syscall.Handle) {
+		err := syscall.FreeLibrary(handle)
+		if err != nil {
+			panic("LoadLibrary " + err.Error())
+		}
+	}(k32)
 	nSetCommState = getProcAddr(k32, "SetCommState")
 	nSetCommTimeouts = getProcAddr(k32, "SetCommTimeouts")
 	nSetCommMask = getProcAddr(k32, "SetCommMask")
@@ -173,7 +181,7 @@ func init() {
 	nCreateEvent = getProcAddr(k32, "CreateEventW")
 	nResetEvent = getProcAddr(k32, "ResetEvent")
 	nPurgeComm = getProcAddr(k32, "PurgeComm")
-	nFlushFileBuffers = getProcAddr(k32, "FlushFileBuffers")
+	// nFlushFileBuffers = getProcAddr(k32, "FlushFileBuffers")
 }
 
 func getProcAddr(lib syscall.Handle, name string) uintptr {
@@ -221,7 +229,7 @@ func setCommState(h syscall.Handle, baud int, databits byte, parity Parity, stop
 		return ErrBadStopBits
 	}
 
-	r, _, err := syscall.Syscall(nSetCommState, 2, uintptr(h), uintptr(unsafe.Pointer(&params)), 0)
+	r, _, err := syscall.SyscallN(nSetCommState, uintptr(h), uintptr(unsafe.Pointer(&params)), 0)
 	if r == 0 {
 		return err
 	}
@@ -251,7 +259,7 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration, intervalTimeou
 	}
 	/* From http://msdn.microsoft.com/en-us/library/aa363190(v=VS.85).aspx
 
-		 For blocking I/O see below:
+		 For blocking I/O, see below:
 
 		 Remarks:
 
@@ -279,7 +287,7 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration, intervalTimeou
 	}
 	timeouts.ReadTotalTimeoutConstant = uint32(timeoutMs)
 
-	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
+	r, _, err := syscall.SyscallN(nSetCommTimeouts, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
 	if r == 0 {
 		return err
 	}
@@ -287,7 +295,7 @@ func setCommTimeouts(h syscall.Handle, readTimeout time.Duration, intervalTimeou
 }
 
 func setupComm(h syscall.Handle, in, out int) error {
-	r, _, err := syscall.Syscall(nSetupComm, 3, uintptr(h), uintptr(in), uintptr(out))
+	r, _, err := syscall.SyscallN(nSetupComm, uintptr(h), uintptr(in), uintptr(out))
 	if r == 0 {
 		return err
 	}
@@ -296,7 +304,7 @@ func setupComm(h syscall.Handle, in, out int) error {
 
 func setCommMask(h syscall.Handle) error {
 	const EV_RXCHAR = 0x0001
-	r, _, err := syscall.Syscall(nSetCommMask, 2, uintptr(h), EV_RXCHAR, 0)
+	r, _, err := syscall.SyscallN(nSetCommMask, uintptr(h), EV_RXCHAR, 0)
 	if r == 0 {
 		return err
 	}
@@ -304,7 +312,7 @@ func setCommMask(h syscall.Handle) error {
 }
 
 func resetEvent(h syscall.Handle) error {
-	r, _, err := syscall.Syscall(nResetEvent, 1, uintptr(h), 0, 0)
+	r, _, err := syscall.SyscallN(nResetEvent, uintptr(h), 0, 0)
 	if r == 0 {
 		return err
 	}
@@ -316,7 +324,7 @@ func purgeComm(h syscall.Handle) error {
 	const PURGE_RXABORT = 0x0002
 	const PURGE_TXCLEAR = 0x0004
 	const PURGE_RXCLEAR = 0x0008
-	r, _, err := syscall.Syscall(nPurgeComm, 2, uintptr(h),
+	r, _, err := syscall.SyscallN(nPurgeComm, uintptr(h),
 		PURGE_TXABORT|PURGE_RXABORT|PURGE_TXCLEAR|PURGE_RXCLEAR, 0)
 	if r == 0 {
 		return err
@@ -326,7 +334,7 @@ func purgeComm(h syscall.Handle) error {
 
 func newOverlapped() (*syscall.Overlapped, error) {
 	var overlapped syscall.Overlapped
-	r, _, err := syscall.Syscall6(nCreateEvent, 4, 0, 1, 0, 0, 0, 0)
+	r, _, err := syscall.SyscallN(nCreateEvent, 0, 1, 0, 0, 0, 0)
 	if r == 0 {
 		return nil, err
 	}
@@ -340,7 +348,7 @@ func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped, wait 
 	if wait {
 		w = 1
 	}
-	r, _, err := syscall.Syscall6(nGetOverlappedResult, 4,
+	r, _, err := syscall.SyscallN(nGetOverlappedResult,
 		uintptr(h),
 		uintptr(unsafe.Pointer(overlapped)),
 		uintptr(unsafe.Pointer(&n)),
@@ -352,3 +360,51 @@ func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped, wait 
 	return n, nil
 }
 
+var (
+	modadvapi32       = windows.NewLazySystemDLL("advapi32.dll")
+	procRegEnumValueW = modadvapi32.NewProc("RegEnumValueW")
+)
+
+func regEnumValue(key syscall.Handle, index uint32, name *uint16, nameLen *uint32, reserved *uint32, class *uint16, value *uint16, valueLen *uint32) (regerrno error) {
+	r0, _, _ := syscall.SyscallN(procRegEnumValueW.Addr(), 8, uintptr(key), uintptr(index), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(nameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(value)), uintptr(unsafe.Pointer(valueLen)), 0)
+	if r0 != 0 {
+		regerrno = syscall.Errno(r0)
+	}
+	return
+}
+
+// GetPortsList will search registry for serial ports on Windos
+// This code comes from ""go.bug.st/serial.v1"
+// Copyright 2014-2017 Cristian Maglie.
+func GetPortsList() ([]string, error) {
+	subKey, err := syscall.UTF16PtrFromString("HARDWARE\\DEVICEMAP\\SERIALCOMM\\")
+	if err != nil {
+		return nil, errors.New("GetPortsList() UTF16PtrFromString failed")
+	}
+
+	var h syscall.Handle
+	if syscall.RegOpenKeyEx(syscall.HKEY_LOCAL_MACHINE, subKey, 0, syscall.KEY_READ, &h) != nil {
+		return nil, nil
+	}
+	defer func() {
+		_ = syscall.RegCloseKey(h)
+	}()
+
+	var valuesCount uint32
+	if syscall.RegQueryInfoKey(h, nil, nil, nil, nil, nil, nil, &valuesCount, nil, nil, nil, nil) != nil {
+		return nil, errors.New("error Enumerating Ports")
+	}
+
+	list := make([]string, valuesCount)
+	for i := range list {
+		var data [1024]uint16
+		dataSize := uint32(len(data))
+		var name [1024]uint16
+		nameSize := uint32(len(name))
+		if regEnumValue(h, uint32(i), &name[0], &nameSize, nil, nil, &data[0], &dataSize) != nil {
+			return nil, errors.New("error Enumerating Ports")
+		}
+		list[i] = syscall.UTF16ToString(data[:])
+	}
+	return list, nil
+}

@@ -1,3 +1,4 @@
+//go:build !windows && !linux && cgo
 // +build !windows,!linux,cgo
 
 package serial
@@ -14,8 +15,30 @@ import (
 	"os"
 	"syscall"
 	"time"
-	//"unsafe"
 )
+
+// Converts the timeout values for Linux / POSIX systems
+func posixTimeoutValues(readTimeout time.Duration) (vmin uint8, vtime uint8) {
+	const MAXUINT8 = 1<<8 - 1 // 255
+	// set blocking / non-blocking read
+	var minBytesToRead uint8 = 1
+	var readTimeoutInDeci int64
+	if readTimeout > 0 {
+		// EOF on zero read
+		minBytesToRead = 0
+		// convert timeout to deciseconds as expected by VTIME
+		readTimeoutInDeci = (readTimeout.Nanoseconds() / 1e6 / 100)
+		// capping the timeout
+		if readTimeoutInDeci < 1 {
+			// min possible timeout 1 Deciseconds (0.1s)
+			readTimeoutInDeci = 1
+		} else if readTimeoutInDeci > MAXUINT8 {
+			// max possible timeout is 255 deciseconds (25.5s)
+			readTimeoutInDeci = MAXUINT8
+		}
+	}
+	return minBytesToRead, uint8(readTimeoutInDeci)
+}
 
 func openPort(name string, baud int, databits byte, parity Parity, stopbits StopBits, readTimeout time.Duration) (p *Port, err error) {
 	f, err := os.OpenFile(name, syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0666)
@@ -85,7 +108,7 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 		return nil, err
 	}
 
-	// Turn off break interrupts, CR->NL, Parity checks, strip, and IXON
+	// Turn off "break" interrupts, CR->NL, Parity checks, strip, and IXON
 	st.c_iflag &= ^C.tcflag_t(C.BRKINT | C.ICRNL | C.INPCK | C.ISTRIP | C.IXOFF | C.IXON | C.PARMRK)
 
 	// Select local mode, turn off parity, set to 8 bits
@@ -145,7 +168,7 @@ func openPort(name string, baud int, databits byte, parity Parity, stopbits Stop
 		return nil, err
 	}
 
-	//fmt.Println("Tweaking", name)
+	// fmt.Println("Tweaking", name)
 	r1, _, e := syscall.Syscall(syscall.SYS_FCNTL,
 		uintptr(f.Fd()),
 		uintptr(syscall.F_SETFL),
